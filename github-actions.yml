@@ -1,0 +1,160 @@
+name: Github Actions
+
+env:
+    dotnetBuildConfiguration: 'Release'
+    dotnetVerbosity: 'Detailed'
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push or pull request events but only for the master branch
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ${{ matrix.os }}
+    strategy:
+        matrix:
+            include:
+            - os: windows-latest
+              artifactName: "nuget-windows"
+            - os: macos-latest
+              artifactName: "nuget-macos"
+            - os: ubuntu-latest
+              artifactName: "nuget-ubuntu"
+    env:
+       pathToBuildProjects: '**/**/*.*sproj'
+       pathToTestProjects: '**/test/**/*.Test.*sproj'
+       pathToPackProjects: '**/src/**/*.*sproj'
+       pathToNugetPackages: '**/*.nupkg'
+
+       sourceRepositoryBranch: $GITHUB_REF_NAME
+       sourceRepositoryCommit: $GITHUB_SHA
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v2
+      - name: Setup .NET Core SDK ${{ matrix.dotnet-version }}
+        uses: actions/setup-dotnet@v1.7.2
+        with:
+          dotnet-version: ${{ matrix.dotnet-version }}
+      
+      - name: Dotnet restore
+        run: dotnet restore ${{ env.pathToBuildProjects }} --verbosity ${{ env.dotnetVerbosity }}     
+      
+      - name: Dotnet build
+        run: dotnet build ${{ env.pathToBuildProjects }} --configuration ${{ env.dotnetBuildConfiguration }} --verbosity ${{ env.dotnetVerbosity }}
+
+      - name: 'Dotnet pack: ci'
+        run: dotnet pack ${{ env.pathToPackProjects }} --output $RUNNER_TEMP"/ci" --configuration ${{ env.dotnetBuildConfiguration }} --verbosity ${{ env.dotnetVerbosity }} /p:Configuration=${{ env.dotnetBuildConfiguration }} /p:RepositoryBranch=${{ env.sourceRepositoryBranch }} /p:RepositoryCommit=${{ env.sourceRepositoryCommit }} /p:VersionSuffix=ci-$GITHUB_RUN_ID
+      
+      - name: 'Dotnet pack: release'
+        run: dotnet pack ${{ env.pathToPackProjects }} --output $RUNNER_TEMP"/release" --configuration ${{ env.dotnetBuildConfiguration }} --verbosity ${{ env.dotnetVerbosity }} /p:Configuration=${{ env.dotnetBuildConfiguration }} /p:RepositoryBranch=${{ env.sourceRepositoryBranch }} /p:RepositoryCommit=${{ env.sourceRepositoryCommit }}
+
+      - name: Dotnet test
+        run: dotnet test ${{ env.pathToTestProjects }} --configuration ${{ env.dotnetBuildConfiguration }} --collect "Code coverage"
+
+        uses: actions/upload-artifact@v2
+        with: 
+            name: ${{ matrix.artifactName }}
+            path: $RUNNER_TEMP
+
+    SignNuget:
+        runs-on: windows-latest
+        needs: build
+        if : ${{ succeeded() && $GITHUB_EVENT_NAME != 'PullRequest' }}
+
+        env:
+          sourceArtifactName: 'nuget-windows'
+          targetArtifactName: 'nuget-windows-signed'
+          pathToNugetPackages: '**/*.nupkg'
+        
+        steps:
+        - name: Download artifact 
+        - uses: actions/download-artifact@v2
+          with:
+            name: ${{ env.sourceArtifactName }}
+
+        - name: 'Download secure file: activesolution-codesigning-cert.pfx'
+        - uses: actions/download-artifact@v2
+          with:
+            name: 'activesolution-codesigning-cert.pfx'
+
+        - name: Install Nuget
+        - uses: nuget/setup-nuget@v1
+          with:
+            nuget-version: '5.x'
+
+        - name: 'Nuget:sign'
+          run: dotnet nuget sign $GITHUB_WORKSPACE"/"${{ env.pathToNugetPackages }} -CertificatePath ${{ codesigningCert.secureFilePath }} -CertificatePassword ${{ codesigningCertPassword }} -Timestamper ${{ codesigningTimestamperUrl }}
+
+          uses: actions/upload-artifact@v2
+          with: 
+            name: ${{ env.targetArtifactName }}
+            path: $GITHUB_WORKSPACE"/"${{ env.sourceArtifactName }}
+
+
+    build samples:
+        needs: []
+        runs-on: ${{ matrix.os }}
+        strategy:
+             matrix:
+                include:
+                - os: windows-latest
+                  artifactName: "nuget-windows"
+                - os: macos-latest
+                  artifactName: "nuget-macos"
+                - os: ubuntu-latest
+                  artifactName: "nuget-ubuntu"
+
+        env:
+            athToBuildProjects: '**/**/*.*sproj'
+            pathToTestProjects: '**/test/**/*.Test.*sproj'
+            pathToPackProjects: '**/src/**/*.*sproj'
+            pathToNugetPackages: '**/*.nupkg'
+
+            sourceRepositoryBranch: $GITHUB_REF_NAME
+            sourceRepositoryCommit: $GITHUB_SHA
+
+        steps:
+            - name: 'Download secure file: BankIdRootCertificate-Prod.crt'
+            - uses: actions/download-artifact@v2
+              with:
+                name: 'BankIdRootCertificate-Prod.crt'
+
+            - name: 'Copy secure file: BankIdRootCertificate-Prod.crt'
+
+            - name: 'Download secure file: BankIdRootCertificate-Test.crt'
+            - uses: actions/download-artifact@v2
+              with:
+                name: 'BankIdRootCertificate-Test.crt'
+
+            - name: 'Copy secure file: BankIdRootCertificate-Test.crt'
+
+            - name: 'Install: .NET Core SDK'
+              uses: actions/setup-dotnet@v1.7.2
+              with:
+                dotnet-version: ${{ matrix.dotnet-version }}
+
+            - name: Dotnet publish
+              run : dotnet publish --configuration ${{ env.dotnetBuildConfiguration }} --output $RUNNER_TEMP --self-contained --runtime win-x86
+
+            - name: 'Copy Files to: AzureProvisioningSample'
+
+              uses: actions/upload-artifact@v2
+              with: 
+                name: ${{ matrix.artifactName }}
+                path: $RUNNER_TEMP
+
+
+
+
+
+
